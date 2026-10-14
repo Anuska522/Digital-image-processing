@@ -13,6 +13,8 @@ from typing import Tuple, Dict, Any, Optional
 import numpy as np
 import cv2
 
+from .preprocessing import to_float32_normalized
+
 
 def generate_change_overlay(
     base_img: np.ndarray,
@@ -38,23 +40,21 @@ def generate_change_overlay(
     Returns:
         RGB uint8 image [H, W, 3] in range [0, 255].
     """
-    # Normalize base image to uint8 RGB
-    if base_img.dtype != np.uint8:
-        if base_img.max() <= 1.0:
-            base_u8 = np.clip(base_img * 255.0, 0, 255).astype(np.uint8)
-        else:
-            base_u8 = np.clip(base_img, 0, 255).astype(np.uint8)
-    else:
-        base_u8 = base_img.copy()
+    if not isinstance(base_img, np.ndarray) or not isinstance(binary_change_map, np.ndarray):
+        raise TypeError("base_img and binary_change_map must be NumPy ndarrays.")
+
+    # Normalize base image safely to uint8 RGB across bit depths
+    base_norm = to_float32_normalized(base_img)
+    base_u8 = (base_norm * 255.0).astype(np.uint8)
 
     if base_u8.ndim == 2:
         base_rgb = cv2.cvtColor(base_u8, cv2.COLOR_GRAY2RGB)
     elif base_u8.shape[2] == 1:
         base_rgb = cv2.cvtColor(base_u8[:, :, 0], cv2.COLOR_GRAY2RGB)
-    elif base_u8.shape[2] >= 3:
-        base_rgb = base_u8[:, :, :3]
+    elif base_u8.shape[2] == 2:
+        base_rgb = np.dstack([base_u8[:, :, 0], base_u8[:, :, 1], base_u8[:, :, 0]])
     else:
-        base_rgb = np.repeat(base_u8[:, :, np.newaxis], 3, axis=2)
+        base_rgb = base_u8[:, :, :3]
 
     h, w = base_rgb.shape[:2]
     mask = (cv2.resize(binary_change_map.astype(np.uint8), (w, h), interpolation=cv2.INTER_NEAREST) > 0)
@@ -64,8 +64,10 @@ def generate_change_overlay(
     color_tile = np.zeros_like(base_rgb)
     color_tile[:] = overlay_color
 
+    alpha_clamped = float(np.clip(alpha, 0.0, 1.0))
+
     # Alpha blend inside mask
-    overlay[mask] = (alpha * color_tile[mask] + (1.0 - alpha) * base_rgb[mask]).astype(np.uint8)
+    overlay[mask] = (alpha_clamped * color_tile[mask] + (1.0 - alpha_clamped) * base_rgb[mask]).astype(np.uint8)
 
     # Draw sharp boundary contours if requested
     if draw_contours and np.any(mask):
@@ -121,8 +123,14 @@ def evaluate_change_detection(
     Returns:
         Comprehensive results dictionary with metrics, confusion matrix, and morphological stats.
     """
+    if not isinstance(predicted_change_map, np.ndarray):
+        raise TypeError("predicted_change_map must be a NumPy ndarray.")
+
     pred_bin = (predicted_change_map > 0).astype(np.uint8)
     total_pixels = int(pred_bin.size)
+    if total_pixels == 0:
+        raise ValueError("predicted_change_map cannot be empty (0 pixels).")
+
     changed_pixels = int(np.sum(pred_bin))
     unchanged_pixels = total_pixels - changed_pixels
     change_ratio = float(changed_pixels / total_pixels)

@@ -159,20 +159,46 @@ def decode_uploaded_image(uploaded_file) -> Optional[Tuple[np.ndarray, Dict[str,
         return None
 
 
+def _prepare_for_display(img: np.ndarray) -> np.ndarray:
+    """Prepares an image array for Streamlit st.image rendering, handling multispectral channels."""
+    if img.ndim == 3 and img.shape[2] > 3:
+        # Render the first 3 channels as standard RGB display
+        norm = img[:, :, :3]
+    elif img.ndim == 3 and img.shape[2] == 1:
+        norm = img[:, :, 0]
+    else:
+        norm = img
+
+    if norm.dtype != np.uint8:
+        if norm.max() <= 1.0:
+            return (np.clip(norm, 0.0, 1.0) * 255.0).astype(np.uint8)
+        else:
+            return np.clip(norm, 0, 255).astype(np.uint8)
+    return norm.copy()
+
+
 def array_to_png_bytes(img: np.ndarray) -> bytes:
     """Converts a NumPy image or mask array to PNG bytes for download."""
-    if img.dtype != np.uint8:
-        if img.max() <= 1.0:
-            u8 = (np.clip(img, 0, 1) * 255).astype(np.uint8)
-        else:
-            u8 = np.clip(img, 0, 255).astype(np.uint8)
+    if img.ndim == 3 and img.shape[2] > 3:
+        to_save = img[:, :, :3]
+    elif img.ndim == 3 and img.shape[2] == 1:
+        to_save = img[:, :, 0]
     else:
-        u8 = img.copy()
+        to_save = img
+
+    if to_save.dtype != np.uint8:
+        if to_save.max() <= 1.0:
+            u8 = (np.clip(to_save, 0, 1) * 255).astype(np.uint8)
+        else:
+            u8 = np.clip(to_save, 0, 255).astype(np.uint8)
+    else:
+        u8 = to_save.copy()
 
     pil_img = Image.fromarray(u8)
     buf = io.BytesIO()
     pil_img.save(buf, format="PNG")
     return buf.getvalue()
+
 
 
 # -----------------------------------------------------------------------------
@@ -499,12 +525,13 @@ with view_tabs[1]:
     with col_t1:
         st.subheader("Temporal Acquisition T1 (Pre-event)")
         st.caption("Reference image baseline after radiometric scaling")
-        st.image((res.t1_preprocessed * 255).astype(np.uint8))
+        st.image(_prepare_for_display(res.t1_preprocessed))
 
     with col_t2:
         st.subheader("Temporal Acquisition T2 (Post-event)")
         st.caption("Subject image following sub-pixel co-registration and PIF normalization")
-        st.image((res.t2_preprocessed * 255).astype(np.uint8))
+        st.image(_prepare_for_display(res.t2_preprocessed))
+
 
     with st.expander("Module 1 Preprocessing Telemetry", expanded=True):
         m1_meta = res.module_diagnostics.get("module_1_preprocessing", {})

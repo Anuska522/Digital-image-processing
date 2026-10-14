@@ -73,3 +73,60 @@ def test_preprocess_multitemporal_pair():
     assert "compatibility" in diag
     assert "coregistration" in diag
     assert "radiometric_normalization" in diag
+
+
+def test_subpixel_coregistration_different_channels():
+    # Test 3-channel ref with 1-channel target
+    ref_3c = np.ones((40, 40, 3), dtype=np.float32) * 0.5
+    tgt_1c = np.ones((40, 40), dtype=np.float32) * 0.4
+    aligned, meta = subpixel_coregistration(ref_3c, tgt_1c)
+    assert aligned.shape[:2] == (40, 40)
+    assert "method" in meta
+
+    # Test 2D grayscale ref with 3-channel target
+    ref_gray = np.ones((40, 40), dtype=np.float32) * 0.5
+    tgt_3c = np.ones((40, 40, 3), dtype=np.float32) * 0.4
+    aligned3, meta3 = subpixel_coregistration(ref_gray, tgt_3c)
+    assert aligned3.shape == (40, 40, 3)
+    assert "method" in meta3
+
+
+def test_relative_radiometric_normalization_mismatched_channels():
+    # 2D reference with 3-channel subject
+    ref_2d = np.ones((30, 30), dtype=np.float32) * 0.5
+    subj_3d = np.ones((30, 30, 3), dtype=np.float32) * 0.6
+    norm_subj, meta = relative_radiometric_normalization(ref_2d, subj_3d, method="pif")
+    assert norm_subj.shape == (30, 30, 3)
+    assert meta["pif_pixel_count"] > 0
+
+    # 4-channel subject with 3-channel reference
+    ref_3c = np.ones((30, 30, 3), dtype=np.float32) * 0.5
+    subj_4c = np.ones((30, 30, 4), dtype=np.float32) * 0.6
+    norm_4c, meta_4c = relative_radiometric_normalization(ref_3c, subj_4c, method="pif")
+    assert norm_4c.shape == (30, 30, 4)
+
+
+def test_to_float32_normalized_edge_cases():
+    # Empty array
+    empty = np.empty((0, 0), dtype=np.float32)
+    assert to_float32_normalized(empty).size == 0
+
+    # Negative values
+    neg_arr = np.array([[-10.0, 0.0], [10.0, 0.0]], dtype=np.float32)
+    norm_neg = to_float32_normalized(neg_arr)
+    assert norm_neg.min() >= 0.0
+    assert norm_neg.max() <= 1.0
+
+    # 16-bit range
+    u16_arr = np.array([[0, 32768], [65535, 10000]], dtype=np.uint16)
+    norm_u16 = to_float32_normalized(u16_arr)
+    assert norm_u16.min() >= 0.0
+    assert norm_u16.max() <= 1.0
+
+
+def test_validate_image_compatibility_empty():
+    with pytest.raises(ValueError, match="empty"):
+        validate_image_compatibility(np.zeros((0, 0)), np.zeros((10, 10)))
+    with pytest.raises(TypeError, match="NumPy ndarrays"):
+        validate_image_compatibility([1, 2, 3], np.zeros((10, 10)))
+

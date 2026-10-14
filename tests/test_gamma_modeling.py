@@ -56,3 +56,33 @@ def test_compute_gamma_unary_costs():
     assert d_changed[0, 1] <= d_unchanged[0, 1]
     # Probability of change should be strictly increasing with Y
     assert prob[0, 1] > prob[0, 0]
+
+
+def test_compute_localized_distance_metric_2d():
+    delta_f_2d = np.ones((25, 25), dtype=np.float32) * 0.2
+    y_map, meta = compute_localized_distance_metric(delta_f_2d, window_size=7)
+    assert y_map.shape == (25, 25)
+    assert np.all(y_map > 0)
+
+
+def test_fit_localized_gamma_distribution_zeros():
+    # Constant / zero y_map should safely fallback without RuntimeWarnings
+    y_zeros = np.zeros((30, 30), dtype=np.float32)
+    k_map, theta_map, meta = fit_localized_gamma_distribution(y_zeros, tile_size=16)
+    assert k_map.shape == (30, 30)
+    assert theta_map.shape == (30, 30)
+    assert np.all(k_map > 0)
+    assert np.all(theta_map > 0)
+
+
+def test_compute_gamma_unary_costs_nonpositive_alpha():
+    y_map = np.ones((10, 10), dtype=np.float32)
+    k_map = np.ones((10, 10), dtype=np.float32) * 2.0
+    theta_map = np.ones((10, 10), dtype=np.float32) * 0.5
+
+    # Negative alpha should be safely bounded, producing no NaNs
+    d_unchanged, d_changed, prob = compute_gamma_unary_costs(y_map, k_map, theta_map, alpha_significance=-0.05)
+    assert not np.isnan(d_changed).any()
+    assert not np.isnan(d_unchanged).any()
+    assert not np.isinf(d_changed).any()
+

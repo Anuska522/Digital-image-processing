@@ -13,6 +13,24 @@ import numpy as np
 import cv2
 
 
+def _to_gray_uint8(img: np.ndarray) -> np.ndarray:
+    """
+    Safely converts any image array (2D, 1-channel, 3-channel RGB/BGR, 4+ channel multispectral)
+    to a 2D uint8 grayscale image for feature matching and co-registration.
+    """
+    norm = to_float32_normalized(img)
+    if norm.ndim == 2:
+        return (norm * 255.0).astype(np.uint8)
+    elif norm.shape[2] == 1:
+        return (norm[:, :, 0] * 255.0).astype(np.uint8)
+    elif norm.shape[2] == 3:
+        u8_3ch = (norm * 255.0).astype(np.uint8)
+        return cv2.cvtColor(u8_3ch, cv2.COLOR_BGR2GRAY)
+    else:
+        # Multispectral (4+ channels) or 2-channel: compute mean across spectral channels
+        return (norm.mean(axis=-1) * 255.0).astype(np.uint8)
+
+
 def validate_image_compatibility(
     img1: np.ndarray,
     img2: np.ndarray
@@ -29,6 +47,9 @@ def validate_image_compatibility(
     """
     if not isinstance(img1, np.ndarray) or not isinstance(img2, np.ndarray):
         raise TypeError("Both input images must be NumPy ndarrays.")
+
+    if img1.size == 0 or img2.size == 0:
+        raise ValueError("Input images cannot be empty (0 elements).")
 
     shape1 = img1.shape
     shape2 = img2.shape
@@ -60,17 +81,27 @@ def to_float32_normalized(img: np.ndarray) -> np.ndarray:
     """
     Normalizes image array to float32 range [0.0, 1.0].
     """
+    if img.size == 0:
+        return np.empty_like(img, dtype=np.float32)
+
     arr = img.astype(np.float32)
-    if arr.max() > 1.0:
-        if arr.max() <= 255.0:
+    min_val, max_val = float(arr.min()), float(arr.max())
+
+    if min_val < 0.0:
+        if max_val > min_val:
+            arr = (arr - min_val) / (max_val - min_val)
+        else:
+            arr = np.zeros_like(arr)
+    elif max_val > 1.0:
+        if max_val <= 255.0:
             arr /= 255.0
-        elif arr.max() <= 65535.0:
+        elif max_val <= 65535.0:
             arr /= 65535.0
         else:
-            min_val, max_val = arr.min(), arr.max()
             if max_val > min_val:
                 arr = (arr - min_val) / (max_val - min_val)
     return np.clip(arr, 0.0, 1.0)
+
 
 
 def subpixel_coregistration(
@@ -111,18 +142,8 @@ def subpixel_coregistration(
         target_resized = target_img.copy()
 
     # Convert to single-channel 8-bit for ECC calculation
-    if ref_img.ndim == 3 and ref_img.shape[2] == 3:
-        ref_gray = cv2.cvtColor((to_float32_normalized(ref_img) * 255).astype(np.uint8), cv2.COLOR_BGR2GRAY)
-        tgt_gray = cv2.cvtColor((to_float32_normalized(target_resized) * 255).astype(np.uint8), cv2.COLOR_BGR2GRAY)
-    elif ref_img.ndim == 3 and ref_img.shape[2] >= 4:
-        ref_gray = (to_float32_normalized(ref_img).mean(axis=-1) * 255).astype(np.uint8)
-        tgt_gray = (to_float32_normalized(target_resized).mean(axis=-1) * 255).astype(np.uint8)
-    elif ref_img.ndim == 3:
-        ref_gray = (to_float32_normalized(ref_img[:, :, 0]) * 255).astype(np.uint8)
-        tgt_gray = (to_float32_normalized(target_resized[:, :, 0]) * 255).astype(np.uint8)
-    else:
-        ref_gray = (to_float32_normalized(ref_img) * 255).astype(np.uint8)
-        tgt_gray = (to_float32_normalized(target_resized) * 255).astype(np.uint8)
+    ref_gray = _to_gray_uint8(ref_img)
+    tgt_gray = _to_gray_uint8(target_resized)
 
     criteria = (cv2.TERM_CRITERIA_EPS | cv2.TERM_CRITERIA_COUNT, max_iterations, termination_eps)
     warp_matrix = np.eye(2, 3, dtype=np.float32)
@@ -187,19 +208,8 @@ def _orb_feature_alignment(ref_img: np.ndarray, target_img: np.ndarray) -> Tuple
     """ORB keypoint matching fallback for co-registration."""
     try:
         orb = cv2.ORB_create(nfeatures=1000)
-        if ref_img.ndim == 3 and ref_img.shape[2] == 3:
-            ref_gray = cv2.cvtColor((to_float32_normalized(ref_img) * 255).astype(np.uint8), cv2.COLOR_BGR2GRAY)
-        elif ref_img.ndim == 3:
-            ref_gray = (to_float32_normalized(ref_img).mean(axis=-1) * 255).astype(np.uint8)
-        else:
-            ref_gray = (to_float32_normalized(ref_img) * 255).astype(np.uint8)
-
-        if target_img.ndim == 3 and target_img.shape[2] == 3:
-            tgt_gray = cv2.cvtColor((to_float32_normalized(target_img) * 255).astype(np.uint8), cv2.COLOR_BGR2GRAY)
-        elif target_img.ndim == 3:
-            tgt_gray = (to_float32_normalized(target_img).mean(axis=-1) * 255).astype(np.uint8)
-        else:
-            tgt_gray = (to_float32_normalized(target_img) * 255).astype(np.uint8)
+        ref_gray = _to_gray_uint8(ref_img)
+        tgt_gray = _to_gray_uint8(target_img)
         
         kp1, des1 = orb.detectAndCompute(ref_gray, None)
         kp2, des2 = orb.detectAndCompute(tgt_gray, None)
@@ -263,9 +273,21 @@ def relative_radiometric_normalization(
     ref = to_float32_normalized(ref_img)
     subj = to_float32_normalized(subject_img)
 
+    # Align spatial dimensions if necessary
+    h_ref, w_ref = ref.shape[:2]
+    h_subj, w_subj = subj.shape[:2]
+    if (h_ref != h_subj) or (w_ref != w_subj):
+        if subj.ndim == 3 and subj.shape[2] > 4:
+            subj = np.stack([
+                cv2.resize(subj[:, :, c], (w_ref, h_ref), interpolation=cv2.INTER_LINEAR)
+                for c in range(subj.shape[2])
+            ], axis=-1)
+        else:
+            subj = cv2.resize(subj, (w_ref, h_ref), interpolation=cv2.INTER_LINEAR)
+
     if method.lower() == "histogram_matching":
         from skimage.exposure import match_histograms
-        matched = match_histograms(subj, ref, channel_axis=-1 if ref.ndim == 3 else None)
+        matched = match_histograms(subj, ref, channel_axis=-1 if (ref.ndim == 3 and subj.ndim == 3) else None)
         return np.clip(matched, 0.0, 1.0).astype(np.float32), {
             "method": "Histogram Matching",
             "reference_mean": float(ref.mean()),
@@ -274,12 +296,19 @@ def relative_radiometric_normalization(
 
     # PIF-based Relative Radiometric Normalization
     # 1. Identify pseudo-invariant pixels based on temporal spectral difference magnitude
-    diff_mag = np.mean(np.abs(ref - subj), axis=-1 if ref.ndim == 3 else None)
-    threshold = np.percentile(diff_mag, pif_percentile)
+    ref_c_count = ref.shape[2] if ref.ndim == 3 else 1
+    subj_c_count = subj.shape[2] if subj.ndim == 3 else 1
+    common_c = min(ref_c_count, subj_c_count)
+
+    ref_common = ref[:, :, :common_c] if ref.ndim == 3 else ref[:, :, np.newaxis]
+    subj_common = subj[:, :, :common_c] if subj.ndim == 3 else subj[:, :, np.newaxis]
+    diff_mag = np.mean(np.abs(ref_common - subj_common), axis=-1)
+
+    threshold = float(np.percentile(diff_mag, pif_percentile))
     pif_mask = diff_mag <= threshold
 
     # Ensure a non-trivial number of PIF samples
-    min_samples = 100
+    min_samples = min(100, max(diff_mag.size // 10, 10))
     if np.sum(pif_mask) < min_samples:
         pif_mask = np.ones_like(diff_mag, dtype=bool)
 
@@ -290,7 +319,12 @@ def relative_radiometric_normalization(
     num_channels = subj.shape[2] if subj.ndim == 3 else 1
 
     for c in range(num_channels):
-        ref_c = ref[:, :, c] if subj.ndim == 3 else ref
+        if ref.ndim == 3:
+            ref_idx = min(c, ref.shape[2] - 1)
+            ref_c = ref[:, :, ref_idx]
+        else:
+            ref_c = ref
+
         subj_c = subj[:, :, c] if subj.ndim == 3 else subj
 
         x_pif = subj_c[pif_mask]
@@ -326,6 +360,7 @@ def relative_radiometric_normalization(
         "post_norm_subj_mean": float(normalized_subj.mean()),
         "ref_mean": float(ref.mean())
     }
+
 
     return normalized_subj, metadata
 

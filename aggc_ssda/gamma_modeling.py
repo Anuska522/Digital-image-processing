@@ -41,6 +41,15 @@ def compute_localized_distance_metric(
     Returns:
         Tuple of (Y [H, W], metadata).
     """
+    if not isinstance(delta_f, np.ndarray):
+        raise TypeError("delta_f must be a NumPy ndarray.")
+    if delta_f.size == 0:
+        raise ValueError("delta_f cannot be empty.")
+    if delta_f.ndim == 2:
+        delta_f = delta_f[:, :, np.newaxis]
+    elif delta_f.ndim != 3:
+        raise ValueError(f"delta_f must be 2D or 3D, got ndim={delta_f.ndim}")
+
     h, w, d = delta_f.shape
 
     # 1. Magnitude of differences to isolate stable background pixels
@@ -141,18 +150,21 @@ def fit_localized_gamma_distribution(
     inliers_global = y_flat[y_flat <= thresh_global]
     inliers_global = inliers_global[inliers_global > 1e-6]
 
-    mean_g = float(np.mean(inliers_global))
-    var_g = float(np.var(inliers_global))
-    if var_g > 1e-8 and mean_g > 1e-6:
-        # Method of Moments initial estimate: mean = k*θ, var = k*θ^2
-        k_global = np.clip(mean_g**2 / var_g, 0.2, 50.0)
-        theta_global = np.clip(var_g / mean_g, 1e-3, 100.0)
+    if len(inliers_global) > 1 and np.var(inliers_global) > 1e-8:
+        mean_g = float(np.mean(inliers_global))
+        var_g = float(np.var(inliers_global))
+        if var_g > 1e-8 and mean_g > 1e-6:
+            k_global = np.clip(mean_g**2 / var_g, 0.2, 50.0)
+            theta_global = np.clip(var_g / mean_g, 1e-3, 100.0)
+        else:
+            k_global = 2.0
+            theta_global = 1.0
     else:
         k_global = 2.0
         theta_global = 1.0
 
     # Local tile-based estimation
-    step = tile_size
+    step = max(int(tile_size), 4)
     num_tiles_y = int(np.ceil(h / step))
     num_tiles_x = int(np.ceil(w / step))
 
@@ -181,15 +193,15 @@ def fit_localized_gamma_distribution(
             theta_map[y_start:y_end, x_start:x_end] = theta_val
 
     # Smooth parameter maps across tile boundaries to eliminate artificial seams
-    k_map = uniform_filter(k_map, size=max(tile_size // 2, 3), mode='reflect')
-    theta_map = uniform_filter(theta_map, size=max(tile_size // 2, 3), mode='reflect')
+    k_map = uniform_filter(k_map, size=max(step // 2, 3), mode='reflect')
+    theta_map = uniform_filter(theta_map, size=max(step // 2, 3), mode='reflect')
 
     metadata = {
         "global_k": float(k_global),
         "global_theta": float(theta_global),
         "mean_local_k": float(k_map.mean()),
         "mean_local_theta": float(theta_map.mean()),
-        "tile_size": tile_size,
+        "tile_size": step,
         "inlier_percentile": inlier_percentile
     }
 
@@ -234,8 +246,9 @@ def compute_gamma_unary_costs(
     d_unchanged = -log_sf
 
     # 2. Cost for assigning Changed (label 1):
-    # Constant baseline corresponding to the significance cutoff threshold alpha
-    d_changed = -np.log(alpha_significance) * np.ones_like(d_unchanged)
+    # Safely bound alpha to (1e-12, 1.0 - 1e-12) to avoid NaN/Inf
+    alpha_safe = float(np.clip(alpha_significance, 1e-12, 1.0 - 1e-12))
+    d_changed = -np.log(alpha_safe) * np.ones_like(d_unchanged)
 
     # 3. Continuous change probability for visualization: P_change = 1 - survival
     prob_change = 1.0 - np.exp(np.clip(log_sf, -30.0, 0.0))

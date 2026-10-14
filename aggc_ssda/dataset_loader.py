@@ -41,17 +41,39 @@ def load_image_from_file(file_path: str) -> np.ndarray:
 
 
 def save_image_to_file(img: np.ndarray, file_path: str) -> None:
-    """Saves image to file in appropriate format."""
+    """Saves image to file in appropriate format, supporting multispectral rasters."""
+    if not isinstance(img, np.ndarray):
+        raise TypeError("img must be a NumPy ndarray.")
+    if img.size == 0:
+        raise ValueError("Cannot save an empty image.")
+
     os.makedirs(os.path.dirname(os.path.abspath(file_path)), exist_ok=True)
+    fn_lower = file_path.lower()
+
+    if fn_lower.endswith((".tif", ".tiff")):
+        try:
+            import tifffile
+            tifffile.imwrite(file_path, img)
+            return
+        except Exception:
+            pass
+
     if img.ndim == 2:
         to_write = img
+    elif img.shape[2] == 1:
+        to_write = img[:, :, 0]
     elif img.shape[2] == 3:
         to_write = cv2.cvtColor(img, cv2.COLOR_RGB2BGR)
     elif img.shape[2] == 4:
         to_write = cv2.cvtColor(img, cv2.COLOR_RGBA2BGRA)
     else:
-        to_write = img
-    cv2.imwrite(file_path, to_write)
+        # For non-TIFF with >4 channels, write the first 3 channels
+        to_write = cv2.cvtColor(img[:, :, :3], cv2.COLOR_RGB2BGR)
+
+    success = cv2.imwrite(file_path, to_write)
+    if not success:
+        raise IOError(f"Failed to write image to {file_path}")
+
 
 
 def generate_benchmark_satellite_pair(

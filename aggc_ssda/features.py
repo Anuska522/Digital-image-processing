@@ -47,7 +47,20 @@ def compute_glcm_texture_entropy(
     Returns:
         2D array of GLCM entropy values [H, W], normalized to [0.0, 1.0].
     """
-    h, w = gray_img.shape[:2]
+    if not isinstance(gray_img, np.ndarray):
+        raise TypeError("gray_img must be a NumPy ndarray.")
+    if gray_img.ndim == 3:
+        gray_img = gray_img[:, :, 0]
+    elif gray_img.ndim != 2:
+        raise ValueError(f"gray_img must be 2D, got shape {gray_img.shape}")
+
+    h, w = gray_img.shape
+    if h == 0 or w == 0:
+        return np.zeros((h, w), dtype=np.float32)
+
+    window_size = max(int(window_size), 1)
+    num_levels = max(int(num_levels), 2)
+
     # Quantize to [0, num_levels - 1]
     quantized = np.clip((gray_img * num_levels).astype(np.int32), 0, num_levels - 1)
     
@@ -106,6 +119,11 @@ def extract_spatial_spectral_features(
     Returns:
         Tuple of (feature_stack [H, W, 4], metadata_dict).
     """
+    if not isinstance(img, np.ndarray):
+        raise TypeError("Input image must be a NumPy ndarray.")
+    if img.size == 0:
+        raise ValueError("Input image cannot be empty.")
+
     h, w = img.shape[:2]
     num_channels = img.shape[2] if img.ndim == 3 else 1
 
@@ -115,10 +133,14 @@ def extract_spatial_spectral_features(
 
     if num_channels >= 4 and ("nir" in bands or num_channels >= 4):
         # Native Multispectral Mode (e.g. Sentinel-2, Landsat-8)
-        red_idx = bands.get("red", 2 if num_channels == 3 else 2)
+        red_idx = bands.get("red", 2)
         green_idx = bands.get("green", 1)
         blue_idx = bands.get("blue", 0)
         nir_idx = bands.get("nir", 3)
+
+        for name, idx in [("red", red_idx), ("green", green_idx), ("blue", blue_idx), ("nir", nir_idx)]:
+            if not (0 <= idx < num_channels):
+                raise ValueError(f"Band index for '{name}' ({idx}) is out of bounds for {num_channels}-channel image.")
 
         r_vis = img[:, :, red_idx].astype(np.float32)
         nir = img[:, :, nir_idx].astype(np.float32)
@@ -162,10 +184,17 @@ def extract_spatial_spectral_features(
 
     elif num_channels == 3:
         # Standard RGB Mode (Fallback Triggered)
-        # In OpenCV / standard image RGB order:
-        red = img[:, :, 0].astype(np.float32)
-        green = img[:, :, 1].astype(np.float32)
-        blue = img[:, :, 2].astype(np.float32)
+        red_idx = bands.get("red", 0)
+        green_idx = bands.get("green", 1)
+        blue_idx = bands.get("blue", 2)
+
+        for name, idx in [("red", red_idx), ("green", green_idx), ("blue", blue_idx)]:
+            if not (0 <= idx < num_channels):
+                raise ValueError(f"Band index for '{name}' ({idx}) is out of bounds for 3-channel image.")
+
+        red = img[:, :, red_idx].astype(np.float32)
+        green = img[:, :, green_idx].astype(np.float32)
+        blue = img[:, :, blue_idx].astype(np.float32)
 
         r_vis = red
 
@@ -194,6 +223,7 @@ def extract_spatial_spectral_features(
         mode = "RGB Fallback Mode (NIR & Wetness approximated via calibrated visible indices)"
         metadata["mode"] = mode
         metadata["fallback_applied"] = True
+        metadata["band_assignments"] = {"red": red_idx, "green": green_idx, "blue": blue_idx}
         metadata["fallback_details"] = {
             "R_vis": "Direct Red band reflectance (chlorophyll absorption)",
             "NIR": "Visible Atmospherically Resistant Index (VARI) leaf proxy",

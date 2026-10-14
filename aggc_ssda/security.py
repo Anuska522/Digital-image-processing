@@ -63,12 +63,17 @@ def sanitize_filename(filename: str, default: str = "output.png") -> str:
 def validate_safe_path(target_path: str, base_dir: str) -> str:
     """
     Ensures target_path resolves strictly inside base_dir, preventing path traversal attacks.
+    Robust against prefix collision attacks (e.g. /app/data vs /app/database) and case sensitivity.
     """
-    abs_base = os.path.abspath(base_dir)
-    abs_target = os.path.abspath(target_path)
-    if not abs_target.startswith(abs_base):
+    norm_base = os.path.normcase(os.path.abspath(base_dir))
+    norm_target = os.path.normcase(os.path.abspath(target_path))
+    try:
+        common = os.path.commonpath([norm_base, norm_target])
+        if common != norm_base:
+            raise SecurityValidationError(f"Path traversal detected: {target_path} is outside {base_dir}.")
+    except (ValueError, Exception):
         raise SecurityValidationError(f"Path traversal detected: {target_path} is outside {base_dir}.")
-    return abs_target
+    return os.path.abspath(target_path)
 
 
 def safe_decode_image_bytes(
@@ -101,6 +106,9 @@ def safe_decode_image_bytes(
             with io.BytesIO(file_bytes) as bio:
                 arr = tifffile.imread(bio)
             if arr is not None and arr.size > 0:
+                # Transpose band-first (C, H, W) to (H, W, C) for standard pipeline consumption
+                if arr.ndim == 3 and arr.shape[0] <= 16 and arr.shape[0] < arr.shape[1] and arr.shape[0] < arr.shape[2]:
+                    arr = np.transpose(arr, (1, 2, 0))
                 h, w = arr.shape[:2]
                 validate_image_dimensions(h, w)
                 metadata["format"] = "TIFF (Multispectral Preserved)"

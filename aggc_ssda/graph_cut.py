@@ -264,6 +264,20 @@ def optimize_graph_cut_change_map(
     Returns:
         Tuple of (binary_change_map [H, W] with {0, 1}, optimization_metadata).
     """
+    if not isinstance(d_unchanged, np.ndarray) or not isinstance(d_changed, np.ndarray):
+        raise TypeError("Unary costs must be NumPy ndarrays.")
+    if d_unchanged.shape != d_changed.shape:
+        raise ValueError(f"d_unchanged shape {d_unchanged.shape} != d_changed shape {d_changed.shape}.")
+    if d_unchanged.size == 0:
+        return np.empty_like(d_unchanged, dtype=np.uint8), {"changed_pixels": 0, "total_pixels": 0}
+    if not isinstance(feature_guide, np.ndarray):
+        raise TypeError("feature_guide must be a NumPy ndarray.")
+    if feature_guide.shape[:2] != d_unchanged.shape[:2]:
+        raise ValueError(f"feature_guide spatial dimensions {feature_guide.shape[:2]} must match unary costs {d_unchanged.shape[:2]}.")
+
+    lambda_param = max(float(lambda_param), 0.0)
+    sigma_scale = max(float(sigma_scale), 1e-4)
+
     weights, sigma_sq = compute_pairwise_contrast_weights(
         feature_img=feature_guide,
         lambda_param=lambda_param,

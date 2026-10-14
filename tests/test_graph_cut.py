@@ -79,3 +79,33 @@ def test_optimize_graph_cut_change_map_fallback():
     assert np.all(change_map[:5, :5] == 0)
     assert meta["changed_pixels"] == 100
     assert "Pure-Python" in meta["solver"]
+
+
+def test_optimize_graph_cut_validation_and_edge_cases():
+    # Mismatched shapes
+    d_u = np.zeros((10, 10), dtype=np.float32)
+    d_c = np.zeros((12, 10), dtype=np.float32)
+    guide = np.zeros((10, 10, 4), dtype=np.float32)
+    with pytest.raises(ValueError, match="shape"):
+        optimize_graph_cut_change_map(d_u, d_c, guide)
+
+    # Guide spatial mismatch
+    guide_bad = np.zeros((8, 8, 4), dtype=np.float32)
+    with pytest.raises(ValueError, match="spatial dimensions"):
+        optimize_graph_cut_change_map(d_u, d_u, guide_bad)
+
+    # 1x1 pixel image
+    d_u_1 = np.array([[2.0]], dtype=np.float32)
+    d_c_1 = np.array([[0.5]], dtype=np.float32)
+    guide_1 = np.zeros((1, 1, 4), dtype=np.float32)
+    cmap_1, _ = optimize_graph_cut_change_map(d_u_1, d_c_1, guide_1)
+    assert cmap_1.shape == (1, 1)
+    assert cmap_1[0, 0] == 1
+
+    cmap_1_fb, _ = optimize_graph_cut_change_map(d_u_1, d_c_1, guide_1, force_fallback=True)
+    assert cmap_1_fb[0, 0] == 1
+
+    # Empty array
+    cmap_empty, _ = optimize_graph_cut_change_map(np.empty((0, 0)), np.empty((0, 0)), np.empty((0, 0, 4)))
+    assert cmap_empty.size == 0
+

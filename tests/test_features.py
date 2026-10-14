@@ -53,3 +53,44 @@ def test_compute_feature_difference():
     assert np.allclose(diff, 0.3)
     expected_mag = np.sqrt(4 * (0.3**2))
     assert np.allclose(mag, expected_mag, atol=1e-5)
+
+
+def test_glcm_texture_entropy_3d_and_empty():
+    # 3D array with (H, W, 1)
+    arr_3d = np.random.uniform(0.0, 1.0, (24, 24, 1)).astype(np.float32)
+    ent_3d = compute_glcm_texture_entropy(arr_3d, window_size=5)
+    assert ent_3d.shape == (24, 24)
+    assert ent_3d.dtype == np.float32
+
+    # Empty array
+    empty = np.empty((0, 0), dtype=np.float32)
+    ent_empty = compute_glcm_texture_entropy(empty)
+    assert ent_empty.shape == (0, 0)
+
+    # Invalid input types
+    with pytest.raises(TypeError):
+        compute_glcm_texture_entropy([[1, 2], [3, 4]])
+
+
+def test_extract_spatial_spectral_features_rgb_band_mapping():
+    # Construct an image where channel 2 (normally Blue) is 0.9, and channel 0 (normally Red) is 0.1
+    img = np.zeros((30, 30, 3), dtype=np.float32)
+    img[:, :, 0] = 0.1
+    img[:, :, 1] = 0.5
+    img[:, :, 2] = 0.9
+
+    # Specify BGR band mapping: Red is at channel 2
+    feat, meta = extract_spatial_spectral_features(img, band_mapping={"red": 2, "green": 1, "blue": 0})
+    # feat[:, :, 0] is R_vis, which must now come from channel 2 (value 0.9)
+    assert np.allclose(feat[:, :, 0], 0.9)
+    assert meta["band_assignments"]["red"] == 2
+
+
+def test_extract_spatial_spectral_features_out_of_bounds_band():
+    img = np.ones((20, 20, 3), dtype=np.float32)
+    with pytest.raises(ValueError, match="out of bounds"):
+        extract_spatial_spectral_features(img, band_mapping={"red": 5})
+
+    with pytest.raises(ValueError, match="empty"):
+        extract_spatial_spectral_features(np.empty((0, 0, 3), dtype=np.float32))
+

@@ -74,3 +74,36 @@ def test_evaluate_change_detection_with_ground_truth():
     assert metrics["commission_error"] == 20.0
     assert metrics["omission_error"] == 20.0
     assert metrics["overall_accuracy"] == 99.0
+
+
+def test_generate_change_overlay_2_channel():
+    # 2-channel base image should not crash and should produce 3-channel RGB overlay
+    base_2c = np.ones((20, 20, 2), dtype=np.uint8) * 100
+    mask = np.zeros((20, 20), dtype=np.uint8)
+    mask[5:15, 5:15] = 1
+
+    overlay = generate_change_overlay(base_2c, mask)
+    assert overlay.shape == (20, 20, 3)
+    assert overlay.dtype == np.uint8
+
+
+def test_generate_change_overlay_uint16_and_float():
+    # 16-bit high dynamic range input
+    base_u16 = np.ones((20, 20, 3), dtype=np.uint16) * 10000
+    mask = np.zeros((20, 20), dtype=np.uint8)
+    mask[2:5, 2:5] = 1
+
+    overlay = generate_change_overlay(base_u16, mask)
+    assert overlay.shape == (20, 20, 3)
+    assert overlay.dtype == np.uint8
+    # Outside mask should be non-saturated
+    assert overlay[0, 0, 0] < 255
+
+
+def test_evaluate_change_detection_empty():
+    with pytest.raises(ValueError, match="empty"):
+        evaluate_change_detection(np.empty((0, 0), dtype=np.uint8))
+
+    with pytest.raises(TypeError, match="NumPy ndarray"):
+        evaluate_change_detection([0, 1, 0])
+

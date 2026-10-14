@@ -74,3 +74,27 @@ def test_safe_decode_image_bytes_valid_png():
 def test_safe_decode_image_corrupt_data():
     with pytest.raises(SecurityValidationError, match="Failed to decode"):
         safe_decode_image_bytes(b"NOT_AN_IMAGE_DATA_12345", "test.png")
+
+
+def test_validate_safe_path_prefix_collision_blocked():
+    with tempfile.TemporaryDirectory() as base_dir:
+        # Create a directory path that has base_dir as a substring prefix but is a sibling directory
+        sibling_dir = base_dir.rstrip("\\/") + "_sibling"
+        target = os.path.join(sibling_dir, "file.txt")
+        with pytest.raises(SecurityValidationError, match="Path traversal detected"):
+            validate_safe_path(target, base_dir)
+
+
+def test_safe_decode_image_bytes_geotiff_band_first():
+    # Test TIFF with band-first shape (4, 32, 32)
+    import tifffile
+    synth_geotiff = np.random.randint(0, 255, (4, 32, 32), dtype=np.uint8)
+    bio = io.BytesIO()
+    tifffile.imwrite(bio, synth_geotiff, photometric='minisblack')
+    raw_bytes = bio.getvalue()
+
+    arr, meta = safe_decode_image_bytes(raw_bytes, "scene.tif")
+    # Should be transposed to (32, 32, 4)
+    assert arr.shape == (32, 32, 4)
+    assert "TIFF" in meta["format"]
+
