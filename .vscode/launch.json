@@ -23,6 +23,18 @@
             ],
             "console": "integratedTerminal",
             "justMyCode": true
+        },
+        {
+            "name": "Run Benchmark CLI (aggc_ssda)",
+            "type": "debugpy",
+            "request": "launch",
+            "module": "aggc_ssda",
+            "args": [
+                "--benchmark"
+            ],
+            "console": "integratedTerminal",
+            "justMyCode": true
         }
     ]
 }
+
